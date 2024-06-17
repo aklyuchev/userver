@@ -4,18 +4,18 @@ import re
 
 from conan import ConanFile
 from conan import errors
-from conan.tools import load
+from conan.tools.files import load
 from conan.tools.cmake import CMake
 from conan.tools.cmake import cmake_layout
 from conan.tools.cmake import CMakeDeps
 from conan.tools.cmake import CMakeToolchain
 from conan.tools.files import copy
 
-required_conan_version = '>=1.51.0, <2.0.0'  # pylint: disable=invalid-name
+#required_conan_version = '>=1.51.0, <2.0.0'  # pylint: disable=invalid-name
 
 
-def get_userver_version() -> str:
-    content = load('cmake/GetUserverVersion.cmake')
+def get_userver_version(self) -> str:
+    content = load(self, 'cmake/GetUserverVersion.cmake')
     major_version = (
         re.search(r'set\(USERVER_MAJOR_VERSION (.*)\)', content)
         .group(1)
@@ -26,13 +26,12 @@ def get_userver_version() -> str:
         .group(1)
         .strip()
     )
-
     return f'{major_version}.{minor_version}'
 
 
 class UserverConan(ConanFile):
     name = 'userver'
-    version = get_userver_version()
+    version = '2.0.3'
     description = 'The C++ Asynchronous Framework'
     topics = ('framework', 'coroutines', 'asynchronous')
     url = 'https://github.com/userver-framework/userver'
@@ -54,6 +53,7 @@ class UserverConan(ConanFile):
         'with_clickhouse': [True, False],
         'with_rabbitmq': [True, False],
         'with_utest': [True, False],
+        'use_lld': [True, False],
         'namespace': ['ANY'],
         'namespace_begin': ['ANY'],
         'namespace_end': ['ANY'],
@@ -61,17 +61,18 @@ class UserverConan(ConanFile):
 
     default_options = {
         'shared': False,
-        'fPIC': True,
-        'lto': False,
-        'with_jemalloc': True,
+        'fPIC': False,
+        'lto': True,
+        'with_jemalloc': False,
         'with_mongodb': True,
-        'with_postgresql': True,
+        'with_postgresql': False,
         'with_postgresql_extra': False,
-        'with_redis': True,
+        'with_redis': False,
         'with_grpc': True,
-        'with_clickhouse': True,
-        'with_rabbitmq': True,
+        'with_clickhouse': False,
+        'with_rabbitmq': False,
         'with_utest': True,
+        'use_lld': True,
         'namespace': 'userver',
         'namespace_begin': 'namespace userver {',
         'namespace_end': '}',
@@ -91,28 +92,37 @@ class UserverConan(ConanFile):
     @property
     def _build_subfolder(self):
         return os.path.join(self.build_folder, 'userver')
-
-    def configure(self):
+            
+    def config_options(self):
         if self.options.shared:
             del self.options.fPIC
+        
+        self.options['spdlog'].header_only = True
+        # Disable use of LTO and lld linker on macos
+        if self.settings.os == 'Macos':
+            self.options.lto = False
+            self.options.use_lld = False
 
     def layout(self):
         cmake_layout(self)
 
     def requirements(self):
-        self.requires('boost/1.79.0', transitive_headers=True)
-        self.requires('c-ares/1.19.1')
+        self.requires('boost/1.81.0', transitive_headers=True)
+        self.requires('c-ares/1.19.1', transitive_headers=True)
         self.requires('cctz/2.3', transitive_headers=True)
         self.requires('concurrentqueue/1.0.3', transitive_headers=True)
-        self.requires('cryptopp/8.7.0')
+        self.requires('cryptopp/8.7.0', transitive_headers=True)
         self.requires('fmt/8.1.1', transitive_headers=True)
-        self.requires('libnghttp2/1.51.0')
-        self.requires('libcurl/7.86.0')
-        self.requires('libev/4.33')
-        self.requires('openssl/1.1.1s')
+        self.requires('libnghttp2/1.51.0', transitive_headers=True)
+        self.requires('libcurl/7.86.0', transitive_headers=True)
+        self.requires('libev/4.33', transitive_headers=True)
+        self.requires('http_parser/2.9.4', transitive_headers=True)
+        self.requires('openssl/1.1.1s', transitive_headers=True)
         self.requires('rapidjson/cci.20220822', transitive_headers=True)
-        self.requires('yaml-cpp/0.7.0')
-        self.requires('zlib/1.2.13')
+        self.requires('spdlog/1.10.1.12', transitive_headers=True)
+        self.requires('yaml-cpp/0.7.0', transitive_headers=True)
+        self.requires('zlib/1.2.13', transitive_headers=True)
+        self.requires('abseil/20230125.3', transitive_headers=True, transitive_libs=True)
 
         if self.options.with_jemalloc:
             self.requires('jemalloc/5.3.0')
@@ -134,9 +144,9 @@ class UserverConan(ConanFile):
         if self.options.with_postgresql:
             self.requires('libpq/14.5')
         if self.options.with_mongodb:
-            self.requires('cyrus-sasl/2.1.27')
+            self.requires('cyrus-sasl/2.1.28')
             self.requires(
-                'mongo-c-driver/1.22.0',
+                'mongo-c-driver/1.27.1',
                 transitive_headers=True,
                 transitive_libs=True,
             )
@@ -211,6 +221,9 @@ class UserverConan(ConanFile):
             'USERVER_FEATURE_TESTSUITE'
         ] = self.options.with_utest
 
+        if self.options.use_lld:
+            tool_ch.variables['USERVER_USE_LD'] = 'lld'
+
         tool_ch.generate()
 
         CMakeDeps(self).generate()
@@ -225,7 +238,12 @@ class UserverConan(ConanFile):
         return os.path.join(self.package_folder, 'cmake')
 
     def package(self):
-        copy(self, pattern='LICENSE', src=self.source_folder, dst='licenses')
+        copy(
+            self,
+            pattern='LICENSE',
+            dst='licenses',
+            src=os.path.join(self.source_folder, 'LICENSE')
+        )
 
         copy(
             self,
@@ -239,7 +257,7 @@ class UserverConan(ConanFile):
             self,
             pattern='*',
             dst=os.path.join(
-                self.package_folder, 'include', 'function_backports',
+                self.package_folder, 'include'
             ),
             src=os.path.join(
                 self.source_folder,
@@ -289,6 +307,24 @@ class UserverConan(ConanFile):
             )
             copy(
                 self,
+                pattern='*',
+                dst=os.path.join(self.package_folder, 'include', 'grpc'),
+                src=os.path.join(
+                    self._build_subfolder, 'grpc', 'proto'
+                ),
+                keep_path=True,
+            )
+            copy(
+                self,
+                pattern='*',
+                dst=os.path.join(self.package_folder, 'include', 'core'),
+                src=os.path.join(
+                    self.source_folder, 'third_party', 'moodycamel', 'include'
+                ),
+                keep_path=True,
+            )
+            copy(
+                self,
                 pattern='GrpcTargets.cmake',
                 dst=os.path.join(self.package_folder, 'cmake'),
                 src=os.path.join(self.source_folder, 'cmake'),
@@ -302,6 +338,7 @@ class UserverConan(ConanFile):
                     'a+',
             ) as grpc_file:
                 grpc_file.write('\nset(USERVER_CONAN TRUE)')
+                grpc_file.write('\nset(USERVER_PYTHON "python3")')
         if self.options.with_utest:
             copy(
                 self,
@@ -369,6 +406,9 @@ class UserverConan(ConanFile):
         def cctz():
             return ['cctz::cctz']
 
+        def spdlog():
+            return ['spdlog::spdlog']
+        
         def boost():
             return ['boost::boost']
 
@@ -380,6 +420,9 @@ class UserverConan(ConanFile):
 
         def libev():
             return ['libev::libev']
+
+        def http_parser():
+            return ['http_parser::http_parser']
 
         def libnghttp2():
             return ['libnghttp2::libnghttp2']
@@ -455,12 +498,14 @@ class UserverConan(ConanFile):
                     + concurrentqueue()
                     + yaml()
                     + libev()
+                    + http_parser()
                     + libnghttp2()
                     + curl()
                     + cryptopp()
                     + jemalloc()
                     + ares()
                     + rapidjson()
+                    + spdlog()
                     + zlib()
                 ),
             },
@@ -508,11 +553,11 @@ class UserverConan(ConanFile):
                         'lib': 'grpc-handlers-proto',
                         'requires': ['core'] + grpc(),
                     },
-                    {
-                        'target': 'api-common-protos',
-                        'lib': 'api-common-protos',
-                        'requires': ['grpc'],
-                    },
+                    #{
+                        #'target': 'api-common-protos',
+                        #'lib': 'api-common-protos',
+                        #'requires': ['grpc'],
+                    #},
                 ],
             )
         if self.options.with_utest:
@@ -587,7 +632,6 @@ class UserverConan(ConanFile):
         debug = (
             'd'
             if self.settings.build_type == 'Debug'
-            and self.settings.os == 'Windows'
             else ''
         )
 
@@ -625,8 +669,31 @@ class UserverConan(ConanFile):
                     ].includedirs.append(
                         os.path.join('include', cmake_component),
                     )
+                if cmake_component == 'core' or cmake_component == 'universal':
+                    self.cpp_info.components[
+                        conan_component
+                    ].includedirs.append(os.path.join('include', cmake_component))
 
                 self.cpp_info.components[conan_component].requires = requires
+
+        self.cpp_info.components['core-internal'].defines.append(
+            f'USERVER_NAMESPACE={self.options.namespace}',
+        )
+        self.cpp_info.components['core-internal'].defines.append(
+            f'USERVER_NAMESPACE_BEGIN={self.options.namespace_begin}',
+        )
+        self.cpp_info.components['core-internal'].defines.append(
+            f'USERVER_NAMESPACE_END={self.options.namespace_end}',
+        )
+        self.cpp_info.components['core'].defines.append(
+            f'USERVER_NAMESPACE={self.options.namespace}',
+        )
+        self.cpp_info.components['core'].defines.append(
+            f'USERVER_NAMESPACE_BEGIN={self.options.namespace_begin}',
+        )
+        self.cpp_info.components['core'].defines.append(
+            f'USERVER_NAMESPACE_END={self.options.namespace_end}',
+        )
 
         self.cpp_info.components['universal'].defines.append(
             f'USERVER_NAMESPACE={self.options.namespace}',

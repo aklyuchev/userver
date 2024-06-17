@@ -174,6 +174,7 @@ option(USERVER_FEATURE_UBOOST_CORO "Use vendored boost context instead of a syst
 
 if (USERVER_FEATURE_GRPC)
   include(cmake/SetupProtobuf.cmake)
+  include(cmake/GrpcTargets.cmake)
 endif()
 
 if (USERVER_IS_THE_ROOT_PROJECT)
